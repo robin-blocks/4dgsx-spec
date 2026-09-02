@@ -1,4 +1,8 @@
-# 4DGSX — the 4D Gaussian Splatting eXchange bundle (v0.2)
+# 4DGSX — the 4D Gaussian Splatting eXchange bundle
+
+_Open specification, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Canonical copy: [4dgsx.com/spec](https://4dgsx.com/spec). Source, the reference
+player and a sample bundle: [github.com/robin-blocks/4dgsx-spec](https://github.com/robin-blocks/4dgsx-spec)._
 
 A match (or any simulated 4D scene) exported as one portable, self-contained
 directory that any platform — web, Quest/WebXR, native — can play back with
