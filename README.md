@@ -12,6 +12,18 @@ It is the format behind [4dgsx.com](https://4dgsx.com), where the
 [Robot Football League](https://rfl.football) airs three matches a day that
 you can watch from any seat, in a browser or a WebXR headset.
 
+![Thirteen seconds of a published bundle in the 4dgsx.com player: a free-camera orbit, a line-up panel docking at the side, then a goal with the scorebug and banner rendered from the data track](docs/demo.gif)
+
+*Thirteen seconds of a published bundle in the 4dgsx.com player. What you are
+looking at, in format terms: the transform track driving 57 bodies at 25 Hz
+under a free camera; the scorebug and the goal banner rendered from
+`hud.json`; a publisher's line-up panel (sandboxed HTML) opening at a dock;
+and the replay dwell the clock map describes. Full quality:
+[docs/demo.mp4](docs/demo.mp4) (2 MB, silent). The match itself:
+[4dgsx.com/watch/s3-m1_real_machina_singularity_united](https://4dgsx.com/watch/s3-m1_real_machina_singularity_united).
+The reference player in this repo plays the same bundles with the built-in
+UI only.*
+
 ## Try it
 
 1. **Watch a match**: <https://4dgsx.com>. No account.
