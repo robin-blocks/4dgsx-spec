@@ -1,0 +1,6 @@
+* text=auto
+*.bin binary
+*.ply binary
+*.m4a binary
+*.png binary
+*.glb binary

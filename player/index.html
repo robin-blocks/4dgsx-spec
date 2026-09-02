@@ -1,0 +1,717 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>4DGSX Replay</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #10131a; overflow: hidden;
+               font: 13px/1.4 -apple-system, "Segoe UI", sans-serif; color: #e8eaf0; }
+  canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .plate { position: absolute; left: 0; top: 0; will-change: transform; white-space: nowrap;
+           background: rgba(10,12,18,.78); border-radius: 6px; padding: 1px 7px 2px;
+           font-size: 11px; font-weight: 600; border-bottom: 2px solid #888; }
+  .plate .num { opacity: .65; margin-right: 4px; font-weight: 800; }
+  .bubble { position: absolute; left: 0; top: 0; will-change: transform; max-width: 210px;
+            background: rgba(250,250,252,.95); color: #14161d; border-radius: 9px;
+            padding: 4px 9px; font-size: 11.5px; line-height: 1.25;
+            border: 2px solid #888; }
+  .panel3d { position: absolute; left: 0; top: 0; will-change: transform;
+             transform-origin: 50% 50%; pointer-events: none; border: 0; }
+  #coach { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
+           background: rgba(10,12,18,.85); border-radius: 8px; padding: 6px 14px;
+           font-size: 13px; display: none; max-width: 70%; z-index: 2; }
+  #coach b { letter-spacing: .05em; }
+  #scorebug { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+              display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+              background: rgba(10,12,18,.82); border-radius: 10px; user-select: none;
+              font-weight: 700; font-size: 15px; letter-spacing: .04em; z-index: 2; }
+  #scorebug .kit { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  #scorebug .clock { font-variant-numeric: tabular-nums; color: #ffd479; margin-left: 6px; }
+  #hud { position: absolute; top: 14px; right: 14px; text-align: right;
+         background: rgba(10,12,18,.72); padding: 8px 12px; border-radius: 9px;
+         color: #9aa3b5; font-size: 11.5px; user-select: none; z-index: 2; }
+  #hud b { color: #dfe4ee; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 18px 14px;
+         display: flex; align-items: center; gap: 12px; z-index: 3;
+         background: linear-gradient(transparent, rgba(8,10,15,.88) 40%); }
+  button, select { background: #232a3a; color: #e8eaf0; border: 1px solid #39415a;
+                   border-radius: 7px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  button:hover { background: #2d3650; }
+  #seekwrap { position: relative; flex: 1; height: 26px; display: flex; align-items: center; }
+  #seek { width: 100%; accent-color: #ffd479; }
+  .goalmark { position: absolute; top: 0; width: 3px; height: 9px; border-radius: 2px;
+              transform: translateX(-1px); pointer-events: none; }
+  #time { font-variant-numeric: tabular-nums; min-width: 86px; text-align: center; }
+  #banner { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%);
+            font-size: 42px; font-weight: 800; letter-spacing: .08em; color: #ffd479;
+            text-shadow: 0 4px 30px rgba(0,0,0,.65); opacity: 0; transition: opacity .25s;
+            pointer-events: none; text-align: center; z-index: 2; }
+  #banner small { display: block; font-size: 17px; color: #fff; letter-spacing: .04em; }
+  #layers { position: absolute; right: 14px; bottom: 58px; z-index: 4; display: none;
+            background: rgba(16,19,27,.96); border: 1px solid #39415a; border-radius: 10px;
+            padding: 10px 14px; min-width: 190px; }
+  #layers label { display: flex; gap: 8px; align-items: center; padding: 4px 0;
+                  cursor: pointer; user-select: none; }
+  #layers .cap { font-size: 11px; color: #9aa3b5; letter-spacing: .08em;
+                 margin-bottom: 4px; }
+  #load { position: absolute; inset: 0; display: flex; align-items: center;
+          justify-content: center; background: #10131a; z-index: 5; font-size: 15px;
+          color: #9aa3b5; flex-direction: column; gap: 10px; }
+</style>
+<canvas id="gl"></canvas>
+<div id="labels"></div>
+<div id="coach"></div>
+<div id="scorebug"></div>
+<div id="hud"></div>
+<div id="banner"></div>
+<div id="layers"></div>
+<div id="bar">
+  <button id="play">⏸</button>
+  <div id="time">0:00.0</div>
+  <div id="seekwrap"><input id="seek" type="range" min="0" max="1000" value="0"></div>
+  <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+    <option value="1" selected>1×</option><option value="2">2×</option></select>
+  <button id="snd" style="display:none">🔇</button>
+  <button id="mode" title="m">Mesh</button>
+  <button id="lyr" title="toggle UI layers">⚙ UI</button>
+  <button id="cam" title="reset to broadcast camera">📺 Broadcast</button>
+</div>
+<div id="load">Loading match bundle…</div>
+<script>
+"use strict";
+// ---------------------------------------------------------- tiny math
+const M = {
+  ident: () => new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]),
+  persp(fovy, asp, n, f) {
+    const t = 1 / Math.tan(fovy / 2), o = new Float32Array(16);
+    o[0] = t / asp; o[5] = t; o[10] = (f + n) / (n - f); o[11] = -1;
+    o[14] = 2 * f * n / (n - f);
+    return o;
+  },
+  lookAt(e, c, up) {
+    let zx = e[0]-c[0], zy = e[1]-c[1], zz = e[2]-c[2];
+    let zl = Math.hypot(zx, zy, zz); zx/=zl; zy/=zl; zz/=zl;
+    let xx = up[1]*zz - up[2]*zy, xy = up[2]*zx - up[0]*zz, xz = up[0]*zy - up[1]*zx;
+    const xl = Math.hypot(xx, xy, xz); xx/=xl; xy/=xl; xz/=xl;
+    const yx = zy*xz - zz*xy, yy = zz*xx - zx*xz, yz = zx*xy - zy*xx;
+    return new Float32Array([
+      xx, yx, zx, 0,  xy, yy, zy, 0,  xz, yz, zz, 0,
+      -(xx*e[0]+xy*e[1]+xz*e[2]), -(yx*e[0]+yy*e[1]+yz*e[2]), -(zx*e[0]+zy*e[1]+zz*e[2]), 1]);
+  },
+  fromRT(q, p) {        // wxyz quat + pos -> column-major mat4
+    const [w,x,y,z] = q, o = new Float32Array(16);
+    o[0]=1-2*(y*y+z*z); o[1]=2*(x*y+w*z);  o[2]=2*(x*z-w*y);  o[3]=0;
+    o[4]=2*(x*y-w*z);   o[5]=1-2*(x*x+z*z);o[6]=2*(y*z+w*x);  o[7]=0;
+    o[8]=2*(x*z+w*y);   o[9]=2*(y*z-w*x);  o[10]=1-2*(x*x+y*y);o[11]=0;
+    o[12]=p[0]; o[13]=p[1]; o[14]=p[2]; o[15]=1;
+    return o;
+  },
+  xform(m, p) {         // mat4 * [x,y,z,1]
+    return [m[0]*p[0]+m[4]*p[1]+m[8]*p[2]+m[12],
+            m[1]*p[0]+m[5]*p[1]+m[9]*p[2]+m[13],
+            m[2]*p[0]+m[6]*p[1]+m[10]*p[2]+m[14],
+            m[3]*p[0]+m[7]*p[1]+m[11]*p[2]+m[15]];
+  },
+};
+
+// ---------------------------------------------------------- shaders
+const MESH_VS = `#version 300 es
+layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNrm;
+uniform mat4 uProj, uView, uModel; out vec3 vNrm; out vec3 vWorld;
+void main() {
+  vec4 w = uModel * vec4(aPos, 1.0);
+  vWorld = w.xyz; vNrm = mat3(uModel) * aNrm;
+  gl_Position = uProj * uView * w;
+}`;
+const MESH_FS = `#version 300 es
+precision highp float;
+in vec3 vNrm; in vec3 vWorld; out vec4 frag;
+uniform vec4 uColor; uniform int uChecker;
+uniform vec3 uG1, uG2, uGMark;
+void main() {
+  vec3 base = uColor.rgb;
+  if (uChecker == 1) {
+    vec2 tf = fract(vWorld.xy * 6.0);              // 6 checker tiles / m
+    float q = (step(0.5, tf.x) == step(0.5, tf.y)) ? 0.0 : 1.0;
+    base = mix(uG1, uG2, q);
+    float e = min(min(tf.x, 1.0 - tf.x), min(tf.y, 1.0 - tf.y));
+    base = mix(mix(uGMark, base, 0.45), base, smoothstep(0.0, 0.035, e));
+  }
+  vec3 n = normalize(vNrm);
+  vec3 sun = normalize(vec3(0.25, 0.15, 1.0));
+  float dif = max(dot(n, sun), 0.0);
+  float hemi = 0.5 + 0.5 * n.z;
+  vec3 c = base * (0.34 + 0.30 * hemi + 0.48 * dif);
+  float spec = pow(max(dot(reflect(-sun, n), vec3(0,0,1)), 0.0), 8.0) * 0.03;
+  frag = vec4(pow(c + spec, vec3(0.9091)), uColor.a);
+}`;
+const PT_VS = `#version 300 es
+layout(location=0) in vec3 aPos; layout(location=1) in vec4 aCol;
+layout(location=2) in float aRad;
+uniform mat4 uProj, uView, uModel; uniform float uPxPerUnit;
+out vec4 vCol;
+void main() {
+  vec4 w = uModel * vec4(aPos, 1.0);
+  vec4 clip = uProj * uView * w;
+  gl_PointSize = clamp(2.0 * aRad * uPxPerUnit / clip.w, 1.5, 90.0);
+  vCol = aCol; gl_Position = clip;
+}`;
+const PT_FS = `#version 300 es
+precision highp float; in vec4 vCol; out vec4 frag;
+void main() {
+  vec2 d = gl_PointCoord * 2.0 - 1.0;
+  float r2 = dot(d, d);
+  if (r2 > 1.0) discard;                    // gaussian disc, surfel-style
+  float a = exp(-2.6 * r2);
+  if (a < 0.30) discard;
+  frag = vec4(vCol.rgb * (0.72 + 0.28 * (1.0 - r2)), 1.0);
+}`;
+
+// ---------------------------------------------------------- app
+const $ = id => document.getElementById(id);
+const cv = $("gl"), gl = cv.getContext("webgl2", { antialias: true });
+
+function prog(vs, fs) {
+  const c = (t, s) => { const h = gl.createShader(t); gl.shaderSource(h, s);
+    gl.compileShader(h);
+    if (!gl.getShaderParameter(h, gl.COMPILE_STATUS))
+      throw gl.getShaderInfoLog(h);
+    return h; };
+  const p = gl.createProgram();
+  gl.attachShader(p, c(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, c(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw gl.getProgramInfoLog(p);
+  return p;
+}
+
+const S = { playing: true, tCur: 0, speed: 1, mode: 0, cam: null, drag: null,
+            bytes: 0, fps: 0, sound: false };
+
+async function fetchBin(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw `${url}: ${r.status}`;
+  const b = await r.arrayBuffer();
+  S.bytes += b.byteLength;
+  return b;
+}
+async function fetchJson(url, fallback) {
+  try { const r = await fetch(url); return r.ok ? await r.json() : fallback; }
+  catch { return fallback; }
+}
+
+(async function main() {
+  const scene = await (await fetch("scene.json")).json();
+  const hud = await fetchJson(scene.hud || "hud.json",
+    { teams: [], players: [], score: [], events: [], clock: {} });
+  const ui = await fetchJson(scene.ui || "ui.json", { layers: [], components: [] });
+  const [geo, trk, pts] = await Promise.all(
+    ["geometry.bin", "track.bin", "points.bin"].map(fetchBin));
+  const meta = scene.meta, HZ = meta.hz, NB = scene.bodies.length;
+  const NF = meta.nframes;
+  const track = new Float32Array(trk);
+  const T0 = scene.times[0], T1 = scene.times[1];
+  const DUR = hud.clock.duration_s || T1;
+
+  // GL buffers ------------------------------------------------------------
+  const vbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(geo, 0, scene.buffers.vertexCount * 6),
+                gl.STATIC_DRAW);
+  const ibo = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,
+                new Uint32Array(geo, scene.buffers.vertexBytes, scene.buffers.indexCount),
+                gl.STATIC_DRAW);
+  const pbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, pbo);
+  gl.bufferData(gl.ARRAY_BUFFER, pts, gl.STATIC_DRAW);
+
+  const pm = prog(MESH_VS, MESH_FS), pp = prog(PT_VS, PT_FS);
+  const um = n => gl.getUniformLocation(pm, n), up = n => gl.getUniformLocation(pp, n);
+  const draws = scene.draws.map(d => ({ ...d, prim: scene.prims[d.p] }))
+      .sort((a, b) => (a.rgba[3] < 0.99) - (b.rgba[3] < 0.99));
+  const splatBodies = new Set(scene.points.map(p => p.b));
+
+  // playback --------------------------------------------------------------
+  const bodyMat = Array.from({ length: NB }, M.ident);
+  const IDENT = M.ident();
+  function pose(t) {
+    const f = Math.min(Math.max((t - T0) * HZ, 0), NF - 1.001);
+    const i0 = Math.floor(f), a = f - i0, i1 = Math.min(i0 + 1, NF - 1);
+    for (let b = 0; b < NB; b++) {
+      const o0 = (i0 * NB + b) * 7, o1 = (i1 * NB + b) * 7;
+      const p = [0,1,2].map(k => track[o0+k] * (1-a) + track[o1+k] * a);
+      let d = 0;
+      for (let k = 3; k < 7; k++) d += track[o0+k] * track[o1+k];
+      const s = d < 0 ? -1 : 1;
+      const q = [3,4,5,6].map(k => track[o0+k] * (1-a) + s * track[o1+k] * a);
+      const ql = Math.hypot(...q) || 1;
+      bodyMat[b] = M.fromRT(q.map(v => v / ql), p);
+    }
+  }
+
+  // hud data --------------------------------------------------------------
+  const css = c => `rgb(${c.slice(0,3).map(v => Math.round(v*255)).join(",")})`;
+  const teamOf = {};
+  for (const tm of hud.teams) teamOf[tm.id] = tm;
+  const playerOf = {};
+  for (const pl of hud.players) playerOf[pl.id] = pl;
+  function scoreAt(t) {
+    let s = hud.score[0] || { a: 0, b: 0 };
+    for (const step of hud.score) { if (step.t <= t) s = step; else break; }
+    return s;
+  }
+  const goalEvents = hud.events.filter(e => e.type === "goal");
+
+  // UI layer system --------------------------------------------------------
+  // ui.json declares layers (user toggles) + components (anchor + content).
+  // Unknown anchor/content types are skipped — the format's extension rule.
+  if (!ui.components.length && hud.players.length) {   // pre-ui bundle: defaults
+    ui.layers = [
+      { id: "players.names", title: "Player names", default: true },
+      { id: "players.radio", title: "Radio chatter", default: true },
+      { id: "match.scorebug", title: "Score bug", default: true },
+      { id: "match.coach", title: "Bench instructions", default: true },
+      { id: "match.banners", title: "Event banners", default: true }];
+    ui.components = hud.players.flatMap(pl => [
+      { id: `np_${pl.id}`, layer: "players.names",
+        anchor: { type: "body", ...pl.anchor },
+        content: { type: "nameplate", player: pl.id } },
+      { id: `bub_${pl.id}`, layer: "players.radio",
+        anchor: { type: "body", body: pl.anchor.body,
+                  offset: [0, 0, pl.anchor.offset[2] + 0.12] },
+        content: { type: "bubble", player: pl.id } }]).concat([
+      { id: "scorebug", layer: "match.scorebug",
+        anchor: { type: "screen" }, content: { type: "scoreboard" } },
+      { id: "coach", layer: "match.coach",
+        anchor: { type: "screen" }, content: { type: "coach-strip" } },
+      { id: "banners", layer: "match.banners",
+        anchor: { type: "screen" }, content: { type: "event-banner" } }]);
+  }
+  const layerOn = {};
+  const saved = JSON.parse(localStorage.getItem("4dgsx-layers") || "{}");
+  for (const l of ui.layers)
+    layerOn[l.id] = l.id in saved ? saved[l.id] : (l.default !== false);
+  const on = c => layerOn[c.layer] !== false;
+
+  // build DOM for body-anchored + world components
+  const plates = {}, bubbles = {}, panels = [];
+  const bodyComps = [];
+  for (const c of ui.components) {
+    if (c.anchor.type === "body" &&
+        ["nameplate", "bubble"].includes(c.content.type)) {
+      const pl = playerOf[c.content.player];
+      if (!pl) continue;
+      const bodyIdx = scene.bodies.indexOf(c.anchor.body);
+      if (bodyIdx < 0) continue;
+      const el = document.createElement("div");
+      const col = teamOf[pl.team] ? css(teamOf[pl.team].color) : "#888";
+      if (c.content.type === "nameplate") {
+        el.className = "plate";
+        el.style.borderBottomColor = col;
+        el.innerHTML =
+          `<span class="num" style="color:${col}">${pl.number}</span>${pl.name}`;
+        plates[pl.id] = el;
+      } else {
+        el.className = "bubble";
+        el.style.borderColor = col;
+        el.style.display = "none";
+        bubbles[pl.id] = { el, until: 0 };
+      }
+      $("labels").appendChild(el);
+      bodyComps.push({ comp: c, el, bodyIdx, player: pl });
+    } else if (c.anchor.type === "world" && c.content.type === "html") {
+      const el = document.createElement("iframe");
+      el.className = "panel3d";
+      el.setAttribute("sandbox", "allow-scripts");
+      const [wM, hM] = c.anchor.size_m || [4, 1.5];
+      el.style.width = "560px";
+      el.style.height = `${560 * hM / wM}px`;
+      el.style.display = "none";
+      $("labels").appendChild(el);
+      const p = { comp: c, el, wM, ready: false };
+      el.addEventListener("load", () => {
+        if (!el.srcdoc) return;              // ignore the initial blank load
+        p.ready = true;
+        el.contentWindow.postMessage({ type: "4dgsx:init", hud }, "*");
+      });
+      // panels are self-contained by contract (sandbox, no network), so
+      // inline them via srcdoc — also survives webviews that block subframes
+      fetch(c.content.src).then(r => r.text()).then(txt => el.srcdoc = txt)
+        .catch(() => el.remove());
+      panels.push(p);
+    }
+    // other anchor/content types: skipped by this reference viewer
+  }
+  const flags = {};   // which native screen components exist + their layer
+  for (const c of ui.components)
+    if (c.anchor.type === "screen") flags[c.content.type] = c.layer;
+
+  // layers + audio menu (audio sources are toggled here too — spec: sources
+  // list in the same menu as UI layers, user prefs beat bundle defaults)
+  const menu = $("layers");
+  function buildMenu() {
+    let html = `<div class="cap">UI LAYERS</div>` + ui.layers.map(l =>
+      `<label><input type="checkbox" data-l="${l.id}" ${layerOn[l.id] ? "checked" : ""}>
+       ${l.title || l.id}</label>`).join("");
+    if (tracks.length)
+      html += `<div class="cap" style="margin-top:9px">AUDIO</div>` +
+        tracks.map(t =>
+        `<label><input type="checkbox" data-a="${t.def.id}" ${srcOn[t.def.id] !== false ? "checked" : ""}>
+         ${t.def.title || t.def.id}</label>`).join("");
+    menu.innerHTML = html;
+  }
+  menu.addEventListener("change", e => {
+    if (e.target.dataset.l != null) {
+      layerOn[e.target.dataset.l] = e.target.checked;
+      localStorage.setItem("4dgsx-layers", JSON.stringify(layerOn));
+      applyLayers();
+    } else if (e.target.dataset.a != null) {
+      srcOn[e.target.dataset.a] = e.target.checked;
+      localStorage.setItem("4dgsx-audio", JSON.stringify(srcOn));
+      syncAudio(true);
+    }
+  });
+  $("lyr").onclick = () => {
+    menu.style.display = menu.style.display === "block" ? "none" : "block";
+  };
+  function applyLayers() {
+    $("scorebug").style.display =
+      layerOn[flags["scoreboard"]] === false ? "none" : "";
+    for (const p of panels)
+      p.el.style.display = on(p.comp) ? "" : "none";
+    // body-anchored components hide inside placeLabels
+  }
+
+  // audio: v0.2 sources[] (crowd / pitch / commentary), or the v0.1 premix
+  // synthesised into one source. Each is an independent <audio> on the shared
+  // match clock, user-toggleable, with per-source map + gain.
+  const audioDefs = (scene.audio && scene.audio.sources && scene.audio.sources.length)
+    ? scene.audio.sources
+    : (scene.audio && scene.audio.file)
+      ? [{ id: "broadcast", title: "Broadcast mix", file: scene.audio.file,
+           map: scene.audio.map, default: true, gain: 1 }]
+      : [];
+  const srcSaved = JSON.parse(localStorage.getItem("4dgsx-audio") || "{}");
+  const srcOn = {};
+  const tracks = audioDefs.map(def => {
+    srcOn[def.id] = def.id in srcSaved ? srcSaved[def.id] : (def.default !== false);
+    const el = new Audio(def.file);
+    el.preload = "auto";
+    el.hidden = true;
+    document.body.appendChild(el);            // attach: lifecycle + inspectable
+    return { def, el };
+  });
+  if (tracks.length) $("snd").style.display = "";
+  $("snd").onclick = () => {                  // master mute (a user gesture:
+    S.sound = !S.sound;                       // also satisfies autoplay policy)
+    $("snd").textContent = S.sound ? "🔊" : "🔇";
+    syncAudio(true);
+  };
+  function mapAt(map, t) {                    // match time -> this source's time
+    if (!map || !map.length) return t;        // identity when absent
+    let i = 0;
+    while (i + 1 < map.length && map[i + 1][0] <= t) i++;
+    return map[i][1] + (t - map[i][0]);
+  }
+  function anchorWorld(anchor) {              // world point of a body|world anchor
+    if (!anchor) return null;
+    if (anchor.type === "world") return anchor.pos;
+    const bi = scene.bodies.indexOf(anchor.body);
+    if (bi < 0 || !bodyMat[bi]) return null;
+    return M.xform(bodyMat[bi], [...(anchor.offset || [0,0,0]), 1]);
+  }
+  function srcVolume(def) {                   // non-positional fallback for
+    let v = def.gain == null ? 1 : def.gain;  // anchored sources: distance on
+    if (def.anchor && S.eye) {                // plain stereo volume (spec SHOULD)
+      const w = anchorWorld(def.anchor);
+      if (w) {
+        const d = Math.hypot(w[0]-S.eye[0], w[1]-S.eye[1], w[2]-S.eye[2]);
+        const ref = (def.rolloff && def.rolloff.ref) || 1;
+        const mx = (def.rolloff && def.rolloff.max) || 60;
+        v *= (d > mx ? 0 : ref / Math.max(ref, d));
+      }
+    }
+    return Math.max(0, Math.min(1, v));
+  }
+  function syncAudio(force) {
+    for (const tr of tracks) {
+      const active = S.sound && srcOn[tr.def.id] !== false;
+      if (!active) { if (!tr.el.paused) tr.el.pause(); continue; }
+      const target = mapAt(tr.def.map, S.tCur);
+      if (force || Math.abs(tr.el.currentTime - target) > 0.25)
+        tr.el.currentTime = target;
+      tr.el.playbackRate = S.speed;
+      tr.el.volume = srcVolume(tr.def);
+      if (S.playing && tr.el.paused) tr.el.play().catch(() => {});
+      if (!S.playing && !tr.el.paused) tr.el.pause();
+    }
+  }
+  buildMenu();
+
+  // scorebug / clock / banner --------------------------------------------
+  function fmtClock(t) {
+    const rem = Math.max(0, DUR - t);
+    return `${Math.floor(rem / 60)}:${String(Math.floor(rem % 60)).padStart(2, "0")}`;
+  }
+  function fmtT(t) {
+    const m = Math.floor(t / 60);
+    return `${m}:${(t - m * 60).toFixed(1).padStart(4, "0")}`;
+  }
+  const tmA = hud.teams[0] || { code: "A", color: [0.4,0.4,0.4,1] };
+  const tmB = hud.teams[1] || { code: "B", color: [0.4,0.4,0.4,1] };
+  let bannerUntil = 0;
+  function banner(head, sub) {
+    if (layerOn[flags["event-banner"]] === false) return;
+    $("banner").innerHTML = `${head}${sub ? `<small>${sub}</small>` : ""}`;
+    $("banner").style.opacity = 1;
+    bannerUntil = S.tCur + 2.6;
+  }
+  function fireEvents(prev, now) {           // events crossed this tick
+    for (const e of hud.events) {
+      if (e.t <= prev || e.t > now) continue;
+      for (const p of panels)
+        if (p.ready && on(p.comp))
+          p.el.contentWindow.postMessage({ type: "4dgsx:event", event: e }, "*");
+      if (e.type === "goal") {
+        const pl = playerOf[e.player];
+        const nm = pl ? `${pl.number} ${pl.name}` : "";
+        banner("GOAL!", `${nm} (${(teamOf[e.team] || {}).code || e.team})`);
+      } else if (e.type === "half") banner("HALF-TIME");
+      else if (e.type === "drop") banner("DROPPED BALL", "referee restart");
+      else if (e.type === "radio") {
+        const b = bubbles[e.player];
+        if (b) { b.el.textContent = e.text; b.until = e.t + (e.dur_s || 3.5); }
+      } else if (e.type === "coach") {
+        if (layerOn[flags["coach-strip"]] === false) continue;
+        const c = $("coach");
+        c.innerHTML = `<b style="color:${css((teamOf[e.team]||{}).color||[1,1,1])}">` +
+                      `${(teamOf[e.team] || {}).code || e.team} BENCH</b>  ${e.text}`;
+        c.style.display = "block";
+        c.dataset.until = e.t + (e.dur_s || 5);
+      }
+    }
+  }
+  const memo = {};                     // touch the DOM only when text changes
+  function setHtml(id, html) {
+    if (memo[id] !== html) { memo[id] = html; $(id).innerHTML = html; }
+  }
+  function updateHudDom() {
+    const sc = scoreAt(S.tCur);
+    setHtml("scorebug",
+      `<span class="kit" style="background:${css(tmA.color)}"></span>${tmA.code}` +
+      ` <span>${sc.a} – ${sc.b}</span> ${tmB.code}` +
+      `<span class="kit" style="background:${css(tmB.color)}"></span>` +
+      `<span class="clock">${fmtClock(S.tCur)}</span>`);
+    const tt = `${fmtT(S.tCur)} / ${fmtT(T1)}`;
+    if (memo.t !== tt) { memo.t = tt; $("time").textContent = tt; }
+    if (!seekHeld) $("seek").value = 1000 * (S.tCur - T0) / (T1 - T0);
+    if (S.tCur > bannerUntil) $("banner").style.opacity = 0;
+    const c = $("coach");
+    if (c.style.display !== "none" && S.tCur > +(c.dataset.until || 0))
+      c.style.display = "none";
+    if ((updateHudDom.n = (updateHudDom.n || 0) + 1) % 15) return;
+    setHtml("hud", `<b>${S.fps.toFixed(0)}</b> fps · ` +
+      `${(scene.buffers.indexCount/3e6).toFixed(2)}M tris · ` +
+      `${scene.draws.length} draws · ${NB} bodies<br>` +
+      `bundle ${(S.bytes/1e6).toFixed(1)} MB · ` +
+      (S.mode ? `splat preview (${(pts.byteLength/20/1e3).toFixed(0)}k pts)` : "mesh mode") +
+      (tracks.length ? ` · audio ${S.sound
+        ? tracks.filter(t => srcOn[t.def.id] !== false).length + "/" +
+          tracks.length : "muted"}` : ""));
+  }
+
+  // panel data feed (~4 Hz)
+  let lastTick = 0;
+  function tickPanels(now) {
+    if (now - lastTick < 250) return;
+    lastTick = now;
+    const sc = scoreAt(S.tCur);
+    for (const p of panels)
+      if (p.ready && on(p.comp))
+        p.el.contentWindow.postMessage({
+          type: "4dgsx:tick", t: S.tCur, clock: fmtClock(S.tCur),
+          score: { a: sc.a, b: sc.b }, playing: S.playing }, "*");
+  }
+
+  // label + panel projection ----------------------------------------------
+  function project(proj, view, world) {
+    const clip = M.xform(proj, M.xform(view, [world[0], world[1], world[2], 1]));
+    if (clip[3] < 0.4) return null;
+    return { x: (clip[0] / clip[3] * 0.5 + 0.5) * cv.clientWidth,
+             y: (0.5 - clip[1] / clip[3] * 0.5) * cv.clientHeight,
+             w: clip[3] };
+  }
+  function placeLabels(proj, view) {
+    const cw = cv.clientWidth, ch = cv.clientHeight;
+    for (const bc of bodyComps) {
+      const el = bc.el;
+      if (!on(bc.comp)) { el.style.display = "none"; continue; }
+      const world = M.xform(bodyMat[bc.bodyIdx], [...bc.comp.anchor.offset, 1]);
+      const s = project(proj, view, world);
+      const isBub = bc.comp.content.type === "bubble";
+      const b = isBub ? bubbles[bc.player.id] : null;
+      let vis = !!s && (!isBub || (S.tCur < b.until && S.tCur > b.until - 12));
+      if (vis) {
+        const x = s.x, y = s.y - (isBub ? 26 : 0);
+        vis = x > -60 && x < cw + 60 && y > -30 && y < ch + 40;
+        if (vis) el.style.transform =
+          `translate(${x.toFixed(1)}px,${y.toFixed(1)}px) translate(-50%,-100%)`;
+      }
+      el.style.display = vis ? "" : "none";
+    }
+    const pxPerUnit = (proj[5] * ch) / 2;    // css px per world unit at w=1
+    for (const p of panels) {
+      if (!on(p.comp)) continue;
+      const s = project(proj, view, p.comp.anchor.pos);
+      if (!s) { p.el.style.visibility = "hidden"; continue; }
+      const scale = (p.wM * pxPerUnit / s.w) / 560;
+      p.el.style.visibility = "";
+      p.el.style.transform =
+        `translate(${s.x.toFixed(1)}px,${s.y.toFixed(1)}px) ` +
+        `translate(-50%,-50%) scale(${scale.toFixed(4)})`;
+    }
+  }
+
+  // camera ----------------------------------------------------------------
+  const camReset = () => ({ az: meta.camera.azimuth, el: meta.camera.elevation,
+                            dist: meta.camera.distance, la: [...meta.camera.lookat] });
+  S.cam = camReset();
+  function viewMat() {
+    const az = S.cam.az * Math.PI / 180, el = S.cam.el * Math.PI / 180;
+    const f = [Math.cos(el)*Math.cos(az), Math.cos(el)*Math.sin(az), Math.sin(el)];
+    const eye = [S.cam.la[0] - f[0]*S.cam.dist, S.cam.la[1] - f[1]*S.cam.dist,
+                 S.cam.la[2] - f[2]*S.cam.dist];
+    S.eye = eye;                              // for anchored-source rolloff
+    return M.lookAt(eye, S.cam.la, [0, 0, 1]);
+  }
+  cv.addEventListener("pointerdown", e => {
+    S.drag = { x: e.clientX, y: e.clientY, b: e.button, shift: e.shiftKey };
+    cv.setPointerCapture(e.pointerId);
+    menu.style.display = "none";
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!S.drag) return;
+    const dx = e.clientX - S.drag.x, dy = e.clientY - S.drag.y;
+    S.drag.x = e.clientX; S.drag.y = e.clientY;
+    if (S.drag.b === 2 || S.drag.shift) {
+      const az = S.cam.az * Math.PI / 180, k = S.cam.dist * 0.0016;
+      S.cam.la[0] += k * (dx * Math.sin(az));
+      S.cam.la[1] += k * (-dx * Math.cos(az));
+      S.cam.la[2] += k * dy;
+    } else { S.cam.az -= dx * 0.35; S.cam.el = Math.max(-89, Math.min(-2, S.cam.el - dy * 0.25)); }
+  });
+  cv.addEventListener("pointerup", () => S.drag = null);
+  cv.addEventListener("contextmenu", e => e.preventDefault());
+  cv.addEventListener("wheel", e => {
+    e.preventDefault();
+    S.cam.dist = Math.max(2, Math.min(45, S.cam.dist * Math.exp(e.deltaY * 0.001)));
+  }, { passive: false });
+
+  // controls --------------------------------------------------------------
+  let seekHeld = false;
+  $("play").onclick = () => { S.playing = !S.playing;
+    $("play").textContent = S.playing ? "⏸" : "▶"; syncAudio(true); };
+  $("speed").onchange = e => { S.speed = +e.target.value; syncAudio(true); };
+  $("cam").onclick = () => S.cam = camReset();
+  $("mode").onclick = () => { S.mode ^= 1; $("mode").textContent = S.mode ? "Splats" : "Mesh"; };
+  $("seek").addEventListener("input", e => {
+    seekHeld = true; S.tCur = T0 + (T1 - T0) * e.target.value / 1000;
+  });
+  $("seek").addEventListener("change", () => { seekHeld = false; syncAudio(true); });
+  addEventListener("keydown", e => {
+    if (e.code === "Space") { e.preventDefault(); $("play").click(); }
+    if (e.code === "ArrowRight") { S.tCur = Math.min(T1, S.tCur + 5); syncAudio(true); }
+    if (e.code === "ArrowLeft") { S.tCur = Math.max(T0, S.tCur - 5); syncAudio(true); }
+    if (e.key === "m") $("mode").click();
+  });
+  for (const g of goalEvents) {              // goal ticks on the seek bar
+    const el = document.createElement("div");
+    el.className = "goalmark";
+    el.style.left = `${100 * (g.t - T0) / (T1 - T0)}%`;
+    el.style.background = css((teamOf[g.team] || { color: [1,1,1] }).color);
+    $("seekwrap").appendChild(el);
+  }
+  applyLayers();
+
+  // render loop -----------------------------------------------------------
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.65, 0.73, 0.82, 1);
+  let tPrev = performance.now();
+  function frame(now) {
+    const dtwRaw = (now - tPrev) / 1000; tPrev = now;
+    // clamp so a throttled/backgrounded tab doesn't teleport the match clock
+    const dtw = Math.min(dtwRaw, 0.1);
+    S.fps = S.fps * 0.92 + (1 / Math.max(dtwRaw, 1e-4)) * 0.08;
+    const prevT = S.tCur;
+    if (S.playing && !seekHeld) {
+      S.tCur += dtw * S.speed;
+      if (S.tCur > T1) { S.tCur = T0; syncAudio(true); }
+    }
+    fireEvents(prevT, S.tCur);
+    pose(S.tCur);
+    syncAudio(false);
+
+    const w = cv.clientWidth * devicePixelRatio, h = cv.clientHeight * devicePixelRatio;
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    gl.viewport(0, 0, w, h);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const proj = M.persp(0.78, w / h, 0.1, 120);
+    const v = viewMat();
+
+    gl.useProgram(pm);
+    gl.uniformMatrix4fv(um("uProj"), false, proj);
+    gl.uniformMatrix4fv(um("uView"), false, v);
+    gl.uniform3fv(um("uG1"), meta.grass.rgb1);
+    gl.uniform3fv(um("uG2"), meta.grass.rgb2);
+    // `mark` is a frozen 0.1 field (spec: turf 0.2, "must not be read");
+    // bundles from scene 0.3 on omit it. Passing undefined here threw and
+    // blanked the canvas. Kept only so the 0.1-era shader still compiles.
+    gl.uniform3fv(um("uGMark"), meta.grass.mark || [0, 0, 0]);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.enableVertexAttribArray(0); gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+    gl.disableVertexAttribArray(2);
+    let blending = false;
+    for (const d of draws) {
+      if (S.mode === 1 && d.b > 0 && splatBodies.has(d.b)) continue;
+      const alpha = d.rgba[3];
+      if (alpha < 0.99 && !blending) {
+        gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false); blending = true;
+      }
+      gl.uniformMatrix4fv(um("uModel"), false, d.b === 0 ? IDENT : bodyMat[d.b - 1]);
+      gl.uniform4fv(um("uColor"), d.rgba);
+      gl.uniform1i(um("uChecker"), d.checker);
+      gl.drawElements(gl.TRIANGLES, d.prim.ic, gl.UNSIGNED_INT, d.prim.io * 4);
+    }
+    if (blending) { gl.disable(gl.BLEND); gl.depthMask(true); }
+
+    if (S.mode === 1) {
+      gl.useProgram(pp);
+      gl.uniformMatrix4fv(up("uProj"), false, proj);
+      gl.uniformMatrix4fv(up("uView"), false, v);
+      gl.uniform1f(up("uPxPerUnit"), proj[5] * h / 2);
+      gl.bindBuffer(gl.ARRAY_BUFFER, pbo);
+      gl.enableVertexAttribArray(0); gl.enableVertexAttribArray(1); gl.enableVertexAttribArray(2);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
+      gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, 20, 12);
+      gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 20, 16);
+      for (const p of scene.points) {
+        gl.uniformMatrix4fv(up("uModel"), false, bodyMat[p.b - 1]);
+        gl.drawArrays(gl.POINTS, p.ofs, p.cnt);
+      }
+      gl.disableVertexAttribArray(2);
+    }
+    placeLabels(proj, v);
+    tickPanels(now);
+    updateHudDom();
+    requestAnimationFrame(frame);
+  }
+  $("load").remove();
+  requestAnimationFrame(frame);
+})().catch(e => { $("load").textContent = "Failed to load: " + e; console.error(e); });
+</script>
