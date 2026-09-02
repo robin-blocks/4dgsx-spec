@@ -18,11 +18,13 @@ you can watch from any seat, in a browser or a WebXR headset.
 looking at, in format terms: the transform track driving 57 bodies at 25 Hz
 under a free camera; the scorebug and the goal banner rendered from
 `hud.json`; a publisher's line-up panel (sandboxed HTML) opening at a dock;
-and the replay dwell the clock map describes. Full quality:
-[docs/demo.mp4](docs/demo.mp4) (2 MB, silent). The match itself:
+and the replay dwell the clock map describes. Full quality as a
+player below, or [docs/demo.mp4](docs/demo.mp4) (2 MB, silent). The match itself:
 [4dgsx.com/watch/s3-m1_real_machina_singularity_united](https://4dgsx.com/watch/s3-m1_real_machina_singularity_united).
 The reference player in this repo plays the same bundles with the built-in
 UI only.*
+
+https://github.com/user-attachments/assets/7bc5b7c1-0839-4f8f-8ada-d0d261a80473
 
 ## Try it
 
