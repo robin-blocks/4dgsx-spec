@@ -64,8 +64,8 @@ still stamps `"version": "0.2"` in `scene.json`.
 - Bundle ids are immutable, so a published bundle keeps the version it was
   stamped with. A bump applies to new bundles, never to a re-cut.
 
-The scene manifest is at **0.3** (`draws[].tex`). `hud.json` is at 0.2,
-`ui.json` at 0.2.
+The scene manifest is at **0.4** (`meta.platform` / `meta.scale`,
+provenance). `hud.json` is at 0.2, `ui.json` at 0.2.
 
 ## Bundle layout
 
@@ -91,9 +91,10 @@ web/
 
 ```jsonc
 {
-  "format": "4dgsx", "version": "0.3",   // 0.2 bundles stay valid
+  "format": "4dgsx", "version": "0.4",   // 0.2 and 0.3 bundles stay valid
   "meta": { "hz": 25.0, "nframes": 2251, "camera": {...},
-            "grass": {...} },                     // the turf, see below
+            "grass": {...},                      // the turf, see below
+            "platform": "microduck", "scale": 4.0 },  // provenance (0.4), below
   "hud": "hud.json",
   "ui": "ui.json",
   "audio": {"file": "audio.m4a", "map": [[0,0], [25.8,25.8], [25.8,30.1], ...],
@@ -116,7 +117,7 @@ web/
 - `draws[].b` indexes `bodies` **plus one** (0 = world/static, baked in
   world frame). A draw's vertices are already in that body's local frame.
 - Many draws may reference one prim — instancing falls out for free (the
-  four RFL robots share one set of link meshes).
+  RFL robots share one set of link meshes).
 
 ### `draws[].tex` — surface tiles (turf 0.3)
 
@@ -188,6 +189,27 @@ With the world-unit fields absent, assume **4 m stripes along x, boundary on
 **Pitch markings are geometry**, never synthesised: the halfway line, circle
 and boxes ship as flat draws like anything else.
 
+### `meta.platform` / `meta.scale` — capture provenance (scene 0.4)
+
+Both optional. `platform` names the rig the moving bodies came from, as a
+free token the producer chooses (`"unitree_g1_12dof"`, `"microduck"`).
+`scale` is the factor the exporter multiplied the native scene by to land
+it in metres — `4.0` for a robot simulated at quarter scale and exported
+up to the real pitch, `1.0` (or absent) when the simulation already was in
+metres. Time is never scaled: one bundle second is one match second. They
+exist so a catalogue, a dataset index or a log can say what a bundle holds
+without opening `geometry.bin`, and so a season that fields two robots on
+one pitch can be told apart by machines.
+
+**Nothing in playback depends on them.** The track is in metres whatever
+`scale` says — a player MUST NOT rescale by it — and body names, label
+offsets and ball size all come from the bundle itself (`bodies`,
+`hud.players[].anchor`, the geometry). A bundle with 1.0 m bodies and a
+0.28 m ball plays in the same player as one with 1.3 m bodies and a 0.70 m
+ball, on the same 14 × 9 m pitch, with no switch anywhere. That is the
+rule these fields must not erode: a consumer that finds itself keying
+behaviour on `platform` wants something that belongs in the bundle instead.
+
 ## geometry.bin
 
 Little-endian, two consecutive sections:
@@ -227,7 +249,13 @@ Interpolate: lerp position, nlerp shortest-path quaternion. 90 s of RFL
 ```
 
 - `anchor` = a body from `scene.json bodies` + an offset in that body's
-  frame. `score` is a step track (value at t = last step ≤ t).
+  frame. It is the contract for where a player IS: the root body is
+  whatever the producer names there, and the offset already carries that
+  rig's head height. Consumers MUST NOT key on body-name patterns
+  (`r0_pelvis` is one rig's root, not a convention) or assume a body
+  count, a player count per team or a ball size — all of it is the
+  bundle's own, and a rig one metre tall plays exactly like one that is
+  taller. `score` is a step track (value at t = last step ≤ t).
 - `teams[].badge` (hud 0.2, optional) — bundle-relative path to a square
   club badge: SVG preferred, or a raster ≥256 px, transparent background,
   legible at 16 px. Players SHOULD use it wherever they mark a team
@@ -471,6 +499,15 @@ renderers without a gaussian rasterizer.
 - Serve anywhere static: `python3 -m http.server -d <dir>/web`.
 ## Changelog
 
+- **provenance 0.4** (2026-09-08, additive; **scene manifest 0.3 → 0.4**,
+  `hud`/`ui` untouched): optional `meta.platform` (the rig the bodies came
+  from, a free token) and `meta.scale` (the factor the exporter applied to
+  land the native scene in metres). Provenance only — playback reads
+  neither, and body names, label offsets and ball size stay the bundle's
+  own, restated under `hud.json`. Written for RFL season 4, which fields
+  a second robot (a 1.0 m biped with a 0.28 m ball) on the same pitch from
+  2026-10-02; the first bundles carrying it are that division's pre-season
+  friendlies in late September 2026.
 - **vocabulary** (2026-09-01, wording only — no version change): the entry
   mode `premiere` is renamed `scheduled`. "Premiere" is film language and
   reads as nonsense for live sport, which is what this format carries. The
