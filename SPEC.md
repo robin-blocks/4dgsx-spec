@@ -10,6 +10,7 @@ a free camera. 4DGSX covers the **3D content** (geometry + gaussian splat
 sets + a rigid transform track), the **UI** (semantic data + a layered,
 user-toggleable presentation system with publisher-designed panels and
 clock-mapped media, e.g. the broadcast feed beside the volumetric render),
+an optional **programme** (video-independent rolls, inserted replays and scheduling),
 and the **audio** (one or more user-toggleable sources — broadcast mix,
 crowd, commentary, spatial mics — each with an explicit clock map). RFL is the reference producer
 (`gauntlet/volumetric.py`) and `index.html` in each bundle is the reference
@@ -20,7 +21,11 @@ Format ids carried in the files: `4dgsx` (scene manifest), `4dgsx-hud`
 semver-ish: additive fields bump minor, layout changes bump major.
 **Must-ignore rule everywhere:** consumers skip unknown fields, unknown
 event types, unknown UI component/anchor/content types. That rule — not
-any particular field — is what future-proofs the format.
+any particular field — is what future-proofs the format. **Exception: an explicit
+`scene.program.version` is a playback contract. Programme-aware readers MUST
+refuse unsupported or malformed explicit programme versions, not silently use
+legacy timing.** This cannot change already-deployed legacy readers; see the
+reader-first release requirement below.
 
 ## Design rules (the part other projects should copy)
 
@@ -39,9 +44,11 @@ any particular field — is what future-proofs the format.
    each track (mix, crowd, commentary, mics) as its own user-toggleable
    source with a piecewise-linear `[match_t, audio_t]` map; a source may
    anchor to a body for spatial playback (v0.2 — see the audio section).
-4. **One clock.** Track frames, hud events, UI bindings, the audio map and
-   media panels are all keyed to match time in seconds. Presentation clocks
-   (count-down, halves) are declared in `hud.json` and derived by the player.
+4. **One authoritative transport, explicit clock domains.** Track frames, HUD
+   events and UI bindings use recorded scene time. A versioned `scene.program`
+   maps extended scene time to programme seconds, including rolls and inserted
+   replays. Neither a video element nor a UI panel owns the transport. HUD
+   presentation clocks (count-down, halves) are derived from scene time.
 5. **The platform ships surfaces; publishers ship panels.** Dock slots,
    layer toggles, the clock/data feed and media playback are format
    concerns; what a stats or line-up panel SHOWS and how it LOOKS belongs
@@ -55,17 +62,21 @@ Each track carries its own `format` + `version` and they move
 `ui.json` (`4dgsx-ui`). A ui 0.2 bundle whose scene manifest gained nothing
 still stamps `"version": "0.2"` in `scene.json`.
 
-- **Minor bump = additive.** New optional fields; older players keep working
-  by ignoring what they do not know (the must-ignore rule).
+- **Minor bump = additive.** New optional fields; older players can parse
+  bundles by ignoring what they do not know (the must-ignore rule). Parsing
+  compatibility does not imply programme timing compatibility: programme/1
+  exports additionally require the reader-first release check below.
 - **Major bump = a break.** An existing field changes meaning or disappears.
 - **A player never refuses a bundle over a minor it does not recognise.** The
   version states what MAY be present; it is not a gate. Nothing in the
-  reference player reads it — it is for humans, validators and logs.
+  reference player gates on it — it is for humans, validators and logs. This
+  is distinct from the explicit `program.version` sub-contract below.
 - Bundle ids are immutable, so a published bundle keeps the version it was
   stamped with. A bump applies to new bundles, never to a re-cut.
 
-The scene manifest is at **0.4** (`meta.platform` / `meta.scale`,
-provenance). `hud.json` is at 0.2, `ui.json` at 0.2.
+The scene manifest is at **0.5** (optional versioned `program`, explicit
+`ui: null`). `hud.json` is at 0.2, `ui.json` at 0.2. Existing 0.1–0.4 bundles
+retain legacy playback unless they explicitly opt into `program.version: "1"`.
 
 ## Bundle layout
 
@@ -91,12 +102,13 @@ web/
 
 ```jsonc
 {
-  "format": "4dgsx", "version": "0.4",   // 0.2 and 0.3 bundles stay valid
+  "format": "4dgsx", "version": "0.5",   // 0.1–0.4 bundles stay valid
   "meta": { "hz": 25.0, "nframes": 2251, "camera": {...},
             "grass": {...},                      // the turf, see below
             "platform": "microduck", "scale": 4.0 },  // provenance (0.4), below
   "hud": "hud.json",
-  "ui": "ui.json",
+  "ui": "ui.json",  // optional; null explicitly means no bundle presentation
+  "program": {...},  // optional programme/1 contract, below
   "audio": {"file": "audio.m4a", "map": [[0,0], [25.8,25.8], [25.8,30.1], ...],
             "sources": [...]},
            // or null. map: [match_t, audio_t] breakpoints, slope 1 between;
@@ -118,6 +130,157 @@ web/
   world frame). A draw's vertices are already in that body's local frame.
 - Many draws may reference one prim — instancing falls out for free (the
   RFL robots share one set of link meshes).
+
+### `program` — video-independent programme (scene 0.5)
+
+`program` standardises the existing RFL shape (`t`, `duration_s`, `map`,
+`segments`) by adding **`"version": "1"`**. An absent, null, or **unversioned**
+`program` is LEGACY, including old producer-private RFL programmes: consumers
+MUST NOT retroactively reinterpret it as this contract. Once `version` is
+present, anything other than the string `"1"` (including `1`, null and unknown
+versions), or malformed version-1 data, MUST fail closed in programme-aware
+readers and publishers. Unknown non-contract fields are ignored.
+
+```json
+{
+  "version": "1",
+  "t": [-2, 12],
+  "duration_s": 17,
+  "map": [[-2, 0], [0, 2], [4, 6], [4, 9], [10, 15], [12, 17]],
+  "segments": [
+    {"id": "pre", "kind": "pre-roll", "t": [-2, 0], "bodies": "hold", "clock": "kickoff"},
+    {"id": "match", "kind": "live", "t": [0, 10], "bodies": "live", "clock": "match"},
+    {"id": "post", "kind": "post-roll", "t": [10, 12], "bodies": "hidden", "clock": "fulltime"}
+  ]
+}
+```
+
+For this example `scene.times` is `[0,10]`; no MP4, audio, UI, or preview points
+file is needed to express the full 17-second programme.
+
+**Four distinct notions of time:**
+
+- **Recorded scene time** (`scene.times`, seconds) addresses the transform track
+  and semantic events. It need not begin at zero. Rendering clamps to those
+  bounds; the manifest's recorded range is not the programme's duration.
+- **Extended scene time** (`program.t`, seconds) includes pre/post-roll outside
+  that recording. It is the first coordinate of `program.map`. It is never an
+  excuse to index outside the track.
+- **Programme seconds** start at zero and end at `duration_s`; they are the
+  second map coordinate and the authoritative playback transport. Duplicate
+  scene-time knots insert positive-duration windows while the event clock holds.
+- **Wall start** is supplied by hosting/scheduling, not baked into the bundle:
+  `startEpochMs` / entry `startsAt` means programme start, **not kickoff**.
+  Scheduled position is `(nowMs - startEpochMs) / 1000` clamped to the programme.
+
+**Validation (normative):** all numeric values are finite JSON numbers (not
+strings or booleans). `t` and `scene.times` are two-number ranges; `t` has
+positive span and covers the ordered recorded range. `duration_s > 0`.
+`map` contains at least two two-number knots, starts at `[t[0],0]` and ends at
+`[t[1],duration_s]`. Programme coordinates strictly increase, scene coordinates
+never decrease. Between distinct scene coordinates the differences in the two
+coordinates MUST be equal (unit slope); equal scene coordinates are inserts.
+Endpoint/alignment/unit-slope comparisons permit absolute error **1e-6 seconds**;
+monotonicity and positive-duration checks are strict. No extrapolated duration,
+implicit cuts, negative-rate intervals or video-duration inference is allowed.
+
+`segments` is a nonempty, ordered partition of `t`, without gaps or overlaps;
+each segment has positive scene-time span. Each carries `t`, `bodies`, and a
+string `clock`. Optional `id` and `kind` are descriptive, not control flow.
+`bodies` is exactly `live`, `hold` or `hidden`:
+
+- `live`: render the mapped scene sample, or the inserted replay sample.
+- `hold`: render the segment's opening scene frame, clamped to the recording.
+- `hidden`: hide tracked bodies, not static geometry or the transport itself.
+
+`clock` is a presentation hint (`kickoff`, `match`, `fulltime` are conventional);
+unknown strings are ignored, never a new transport or a validation error.
+
+An optional segment `program: [startSeconds,endSeconds]` states its programme
+range. When omitted it is derived from its `t` endpoints. Internal boundaries
+use the **first/before-insert** programme coordinate at that scene time (unit
+slope between knots); the first start is zero and the final end is `duration_s`.
+Thus an insert on an omitted boundary belongs to the segment **starting** there.
+An explicit boundary MAY instead choose the **last/after-insert** coordinate at
+that scene time, assigning the whole insert to the preceding segment (as RFL's
+final replay does). An interior point of an insert is not a segment boundary.
+Both adjacent segments MUST agree on the chosen boundary, and their ranges
+MUST partition `[0,duration_s]`. Intervals are half-open; the exact final endpoint uses the last
+segment. Arbitrary replay sample ranges are not part of version 1.
+
+**Sampling and transport:** inside an insert `[b0,b1)`, event/HUD time `t` holds
+at the duplicate scene coordinate. Only `renderT` sweeps the previous
+`b1-b0` seconds, clamped to `scene.times`: `t - (b1-b0)*(1-progress)`. The exact
+insert start has progress 0; the exact end exits replay. This matches the
+reference `invMap`. Scores/events follow held `t`, never replay `renderT`.
+`hold` overrides the rendered pose; `hidden` controls visibility independently.
+
+VOD starts at kickoff (the forward map of recorded start), not programme zero;
+it advances programme time, traverses inserts, and stops at the final sample
+without looping. A scene-time seek clamps to the recording and resolves
+**after all inserts** at its destination. Programme-time seeks can enter rolls
+or inserts. Scheduled playback ignores local pause, rate and delta-time while
+locked: it catches up from the wall clock, including late joins and background
+tabs. Before start it is `upcoming`/paused; from zero through strictly less than
+`duration_s` it is `live`/playing. At **elapsed >= duration_s**, it holds the
+final sample, pauses, becomes `replay`, and unlocks transport permanently for
+VOD seeking; a backwards wall-clock change cannot relock a completed schedule.
+An inserted replay does not change scheduled state to `replay`: that state
+means on-demand/finished availability, distinct from the replay-sample flag.
+
+The renderer-independent reference API is `readProgram(scene): Program | null`,
+`ProgrammeController(program,t0,t1,scheduled?)`, `sample()`,
+`update(dtSeconds,nowMs,playing,speed=1)`, `seek(sceneTime)` and
+`seekProgramme(seconds)`. Invalid VOD deltas (negative/nonfinite), rates
+(nonpositive/nonfinite) and seeks (nonfinite) are rejected. Locked seeks return
+the unchanged sample. Snapshots expose `programmeTime`, held/event `t`,
+`renderT`, insert `replay`, `state`, `playing`, `ended`, `bodies`, and `preKick`
+(seconds until kickoff while in pre-roll, otherwise null). The controller
+initialises scheduled position from the wall clock immediately.
+
+**Audio/video target rule (normative):** a source with a map **equal to the
+programme map** consumes programme seconds directly, including inserts and
+rolls. Equality means the same number/order of knots and each coordinate within
+1e-6 seconds. A source with a different or absent map uses the ordinary forward
+map of held event `t`; an absent map means identity, **never** an inferred
+programme edit. Sources cut from the programme edit MUST carry that equal map,
+even when video is absent or presentation is disabled. The shared reference
+`sourceTime(program,snapshot,map?)` implements this rule for BOTH audio and
+video. No UI/media component may secretly become the master clock.
+
+**Reader-first release requirement:** a scene minor bump or adding
+`program.version` cannot fix old external readers which ignore the field.
+Hosting MUST upgrade/verify its intended readers, including pinned/cached SDKs,
+embeds and any exported standalone player, before enabling versioned exports.
+The SDK advertises programme capability; this is a release check, not an
+assumption that every reader of scene 0.5 supports it. `bin/4dgsx-publish`
+requires explicit **`--programme-reader-ready`** acknowledgement for a versioned
+programme; `--dry-run` permits local validation without it and uploads nothing.
+For validated version 1, entry duration comes ONLY from `program.duration_s`,
+not HUD, track, UI, media metadata, or a hidden video. Malformed/unknown explicit
+versions refuse publication. The legacy unversioned longer-programme guard
+remains intact; adding an unversioned duration does not bypass it. This change
+neither mutates old published bundles nor changes spoiler-safe URL/score gates.
+
+### Presentation is independent of programme
+
+`scene.ui: null` explicitly means **no bundle presentation**. Do not fetch
+`ui.json`, bundle panels, or invent fallback publisher overlays in that case.
+An absent `ui` property retains the legacy optional `ui.json` fetch/fallback;
+a string selects that presentation file as before. `hud.json` remains semantic
+data, usable for events and clocks even with no panels. A versioned programme
+continues unchanged with `ui: null` and without video.
+
+The player/SDK option `presentation: 'none' | 'all' | string[]` independently
+selects no presentation, all available components, or the specified component IDs.
+It does not disable audio, remove the programme, change schedule/transport,
+or override `scene.ui: null` by inventing presentation. Explicit empty UI files
+also mean no fallback overlays. Readers SHOULD bound optional UI discovery so
+a stalled UI sidecar cannot prevent the scene mounting (the supplied readers
+allow two seconds, then continue without it). Layer defaults and
+user choices apply to the layers used by the permitted components. Attribution supplied by the host
+outside bundle UI is unchanged and is not a publisher layer that this option
+can suppress.
 
 ### `draws[].tex` — surface tiles (turf 0.3)
 
@@ -357,13 +520,17 @@ tokens get a neutral glyph.
   texture: `{kind: "video" (others reserved), src, map?, mute?, aspect?}`.
   `src` is bundle-relative; `map` has exactly the audio-source semantics
   (match-time → media-time breakpoints, identity when absent, inserted
-  replay windows are skipped) and the same drift-corrected seek behaviour.
+  replay windows are skipped for legacy scene-time-driven playback) and the
+  same drift-corrected seek behaviour. With versioned `scene.program`, the
+  programme source-target rule above takes precedence, including inserted dwell.
   `mute: true` is the norm when the bundle ships audio sources — the
   stems are the sound, the media is picture. The broadcast feed beside
   the free-camera render is the canonical use; a later version points
   `src` at a live stream URL and nothing else changes.
 
-  **The broadcast window.** The media file SHOULD be the broadcast
+  **The broadcast window (legacy media-master playback).** Without a versioned
+  `scene.program`, the following existing media behaviour remains unchanged.
+  The media file SHOULD be the broadcast
   programme end to end — the stream's pre-roll, the match (baked replays
   included), the post-roll — so the bundle and the simulcast are the same
   timeline. The map already expresses this: media time before the first
@@ -466,8 +633,10 @@ action vocabulary above.
   legacy `file`.
 
 **The time map** (per source): the broadcast timeline inserts `replay_s`
-seconds at each goal; `map` encodes exactly that. Reference behaviour:
-skip the inserted windows. A richer player may dwell at a jump and let the
+seconds at each goal; `map` encodes exactly that. Legacy scene-time-driven
+reference behaviour: skip the inserted windows. With `scene.program.version: "1"`,
+use the programme source-target rule: equal maps play inserts and rolls directly
+from programme seconds, independently of whether a media component exists. A richer player may dwell at a jump and let the
 replay audio play over its own replay presentation. For fully synthesized
 spatial audio, use `hud.sfx` instead of (or on top of) the sources.
 
@@ -498,6 +667,14 @@ renderers without a gaussian rasterizer.
   audio map).
 - Serve anywhere static: `python3 -m http.server -d <dir>/web`.
 ## Changelog
+
+- **programme 0.5** (2026-09-22; scene manifest 0.4 → 0.5; HUD/UI tracks
+  unchanged): optional explicit `program.version: "1"`, validated programme map,
+  segments, duration, replay/roll sampling and scheduled/VOD transport independent
+  of media/UI; explicit `ui: null` and independent host presentation selection.
+  Unversioned programmes stay legacy. Reader-aware validation fails closed on
+  malformed/unknown explicit programme versions; reader-first publishing is
+  mandatory because the minor stamp cannot upgrade existing consumers.
 
 - **provenance 0.4** (2026-09-08, additive; **scene manifest 0.3 → 0.4**,
   `hud`/`ui` untouched): optional `meta.platform` (the rig the bodies came
