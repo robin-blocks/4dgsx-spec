@@ -305,7 +305,10 @@ stating, because they are the whole point:
   convention (v = 0 at the image's *bottom* row) and it is stated here so
   publishers do not have to discover it by rendering.
 - **The tile supplies the draw's rgb**; `rgba[3]` still applies as alpha. A
-  tile outranks `meta.grass` on the same draw.
+  tile outranks `meta.grass` on the same draw. Texel values are used as they
+  are, in the same space as `rgba` — **no sRGB decode on sampling**. (In
+  three.js that means leaving the texture's `colorSpace` untagged; tagged
+  `SRGBColorSpace`, the pitch draws darker than the reference player.)
 
 Tiles do not need power-of-two dimensions. Players are expected to mipmap and,
 where available, sample anisotropically — a mown surface viewed down its own
@@ -384,7 +387,10 @@ Little-endian, two consecutive sections:
 
 `float32 [nframes][nbodies][7]` — `x y z` position then `w x y z` unit
 quaternion (MuJoCo convention), world frame, `bodies` order, at `meta.hz`.
-Interpolate: lerp position, nlerp shortest-path quaternion. 90 s of RFL
+Interpolate: lerp position, nlerp shortest-path quaternion. A player MAY
+instead carry position along a smoother curve through the neighbouring frames
+(4dgsx.com uses Catmull-Rom, keeping the straight chord at a kick, a bounce or
+a teleport); any curve MUST pass through every recorded sample. 90 s of RFL
 ≈ 3.6 MB (≈ 40 kB/s); quantization is planned for a later version.
 
 ## hud.json — the data track
@@ -668,6 +674,11 @@ renderers without a gaussian rasterizer.
 - Serve anywhere static: `python3 -m http.server -d <dir>/web`.
 ## Changelog
 
+- **rendering clarification** (2026-09-24, wording only — no version change):
+  players MAY interpolate track positions along a smoother curve than the lerp,
+  provided it passes through every recorded sample; `draws[].tex` texels are
+  not sRGB-decoded on sampling. Both came out of a host's broadcast audit of
+  a three.js embed against RFL's offline render.
 - **programme 0.5** (2026-09-22; scene manifest 0.4 → 0.5; HUD/UI tracks
   unchanged): optional explicit `program.version: "1"`, validated programme map,
   segments, duration, replay/roll sampling and scheduled/VOD transport independent
